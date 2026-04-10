@@ -78,10 +78,12 @@ function sendMorningMail() {
       lines.push('本日の休暇者はいません。');
     } else {
       var leaveGroups = {};
+      var lvRetroCount = 0;
       for (var i = 0; i < todayLeaves.length; i++) {
         var lv = todayLeaves[i];
         if (!leaveGroups[lv.deptName]) leaveGroups[lv.deptName] = [];
         leaveGroups[lv.deptName].push(lv);
+        if (lv.isRetroactive) lvRetroCount++;
       }
       var lvDepts = Object.keys(leaveGroups).sort();
       for (var i = 0; i < lvDepts.length; i++) {
@@ -91,17 +93,22 @@ function sendMorningMail() {
           var lv = lvArr[j];
           var detail = lv.leaveType + '　' + lv.leaveKubun;
           if (lv.halfType) detail += '（' + lv.halfType + '）';
-          lines.push('  - ' + lv.workerName + '　' + detail);
+          // 過去日休暇は対象日付きラベル（本日休暇者リストでは対象日が表示されないため）
+          var retroLabel = formatRetroactiveLabel_(lv, true);
+          lines.push('  - ' + lv.workerName + '　' + detail + retroLabel);
         }
       }
       lines.push('');
       lines.push('合計: ' + todayLeaves.length + '名');
+      if (lvRetroCount > 0) {
+        lines.push('（うち過去申請: ' + lvRetroCount + '件）');
+      }
     }
+    lines.push('');
+    if (LEAVE_PDF_FOLDER_URL) lines.push('休暇届け申請書フォルダ：' + LEAVE_PDF_FOLDER_URL);
+    if (LEAVE_ACCUMULATION_SS_URL) lines.push('休暇届台帳（総務確認用）：' + LEAVE_ACCUMULATION_SS_URL);
     var leaveUrl = getLeaveAppUrl_();
-    if (leaveUrl) {
-      lines.push('');
-      lines.push('休暇届け管理画面：' + leaveUrl + '?page=somuAdmin');
-    }
+    if (leaveUrl) lines.push('休暇届アプリ：' + leaveUrl);
   } catch (e) {
     lines.push('（休暇者データ取得でエラー: ' + e.message + '）');
   }

@@ -2,6 +2,7 @@
 
 /**
  * 当日の残業申請一覧（submitted + approved）
+ * 追加: 本日提出の過去日遡及申請（targetDate < 本日 かつ targetDate >= 年度開始3/16）もOR条件で含める
  */
 function readOtOvertimeRequests_(dateObj) {
   var ss = getOtSS_();
@@ -12,6 +13,7 @@ function readOtOvertimeRequests_(dateObj) {
   if (lastRow < 2) return [];
 
   var ymd = fmtDate_(dateObj, 'yyyy-MM-dd');
+  var fyStartYmd = fmtDate_(getFiscalYearStartDate_(dateObj), 'yyyy-MM-dd');
   var values = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getValues();
 
   var out = [];
@@ -30,18 +32,40 @@ function readOtOvertimeRequests_(dateObj) {
         ? fmtDate_(targetDateVal, 'yyyy-MM-dd')
         : fmtDate_(new Date(targetDateVal), 'yyyy-MM-dd');
     } catch (e) { continue; }
-    if (targetYmd !== ymd) continue;
+
+    // submittedAt を取得
+    var submittedAtVal = idx['submittedAt'] !== undefined ? row[idx['submittedAt']] : null;
+    var submittedYmd = '';
+    if (submittedAtVal) {
+      try {
+        submittedYmd = submittedAtVal instanceof Date
+          ? fmtDate_(submittedAtVal, 'yyyy-MM-dd')
+          : fmtDate_(new Date(submittedAtVal), 'yyyy-MM-dd');
+      } catch (e) { submittedYmd = ''; }
+    }
+
+    // 条件A: 既存 → 対象日が本日
+    var matchToday = (targetYmd === ymd);
+    // 条件B: 追加 → 本日提出かつ対象日が過去（年度開始以降）
+    var matchRetro = (submittedYmd === ymd) && (targetYmd < ymd) && (targetYmd >= fyStartYmd);
+    if (!matchToday && !matchRetro) continue;
 
     var approvedBy2 = idx['approvedBy2'] !== undefined ? normalize_(row[idx['approvedBy2']]) : '';
     var statusLabel = '未承認';
     if (approvedBy2) statusLabel = '二次承認済';
     else if (status === 'approved') statusLabel = '承認済';
 
+    var isRetroactive = computeIsRetroactive_(submittedAtVal, targetYmd);
+    var daysAgo = isRetroactive ? computeDaysAgo_(targetYmd, ymd) : 0;
+
     out.push({
       dept: normalize_(row[idx['dept']]),
       workerName: normalize_(row[idx['workerName']]),
       approvedMinutes: Number(row[idx['approvedMinutes']] || 0),
       statusLabel: statusLabel,
+      targetDate: targetYmd,
+      isRetroactive: isRetroactive,
+      daysAgo: daysAgo,
     });
   }
 
@@ -51,6 +75,7 @@ function readOtOvertimeRequests_(dateObj) {
 
 /**
  * 今週末〜の休日出勤申請一覧
+ * 追加: 本日提出の過去日遡及休日出勤申請（年度開始以降〜本日未満）もOR条件で含める
  */
 function readOtHolidayRequests_(dateObj) {
   var ss = getOtSS_();
@@ -61,6 +86,8 @@ function readOtHolidayRequests_(dateObj) {
   if (lastRow < 2) return [];
 
   var now = dateObj;
+  var todayYmd = fmtDate_(now, 'yyyy-MM-dd');
+  var fyStartYmd = fmtDate_(getFiscalYearStartDate_(now), 'yyyy-MM-dd');
   var dow = now.getDay();
   var monday = new Date(now);
   monday.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
@@ -93,7 +120,22 @@ function readOtHolidayRequests_(dateObj) {
         : fmtDate_(new Date(targetDateVal), 'yyyy-MM-dd');
     } catch (e) { continue; }
 
-    if (targetYmd < weekendStart || targetYmd > weekendEnd) continue;
+    // submittedAt 取得
+    var submittedAtVal = idx['submittedAt'] !== undefined ? row[idx['submittedAt']] : null;
+    var submittedYmd = '';
+    if (submittedAtVal) {
+      try {
+        submittedYmd = submittedAtVal instanceof Date
+          ? fmtDate_(submittedAtVal, 'yyyy-MM-dd')
+          : fmtDate_(new Date(submittedAtVal), 'yyyy-MM-dd');
+      } catch (e) { submittedYmd = ''; }
+    }
+
+    // 条件A: 既存 → 今週末範囲
+    var matchWeekend = (targetYmd >= weekendStart && targetYmd <= weekendEnd);
+    // 条件B: 追加 → 本日提出の過去日休日出勤
+    var matchRetro = (submittedYmd === todayYmd) && (targetYmd < todayYmd) && (targetYmd >= fyStartYmd);
+    if (!matchWeekend && !matchRetro) continue;
 
     var d = new Date(targetYmd + 'T00:00:00');
     var dateLabel = (d.getMonth()+1) + '/' + d.getDate() + '(' + dayNames[d.getDay()] + ')';
@@ -103,6 +145,9 @@ function readOtHolidayRequests_(dateObj) {
     if (approvedBy2) statusLabel = '二次承認済';
     else if (status === 'approved') statusLabel = '承認済';
 
+    var isRetroactive = computeIsRetroactive_(submittedAtVal, targetYmd);
+    var daysAgo = isRetroactive ? computeDaysAgo_(targetYmd, todayYmd) : 0;
+
     out.push({
       dept: normalize_(row[idx['dept']]),
       workerName: normalize_(row[idx['workerName']]),
@@ -110,6 +155,8 @@ function readOtHolidayRequests_(dateObj) {
       statusLabel: statusLabel,
       targetDate: targetYmd,
       targetDateLabel: dateLabel,
+      isRetroactive: isRetroactive,
+      daysAgo: daysAgo,
     });
   }
 

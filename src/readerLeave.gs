@@ -43,6 +43,7 @@ function buildLeaveHeaderIndex_(header) {
 
 /**
  * 本日の休暇者一覧を取得（承認済み、休暇日＝今日）
+ * 追加: 本日提出された過去日休暇申請（承認済み）も拾う
  */
 function readTodayLeaves_() {
   var ss = getLeaveSS_();
@@ -58,8 +59,12 @@ function readTodayLeaves_() {
 
   var values = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getValues();
   var now = new Date();
+  var todayYmd = fmtDate_(now, 'yyyy-MM-dd');
+  var fyStartYmd = fmtDate_(getFiscalYearStartDate_(now), 'yyyy-MM-dd');
   var todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
   var todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+  var appliedAtCol = idx['申請日時'] !== undefined ? idx['申請日時'] : idx['APPLIED_AT'];
 
   var out = [];
   for (var i = 0; i < values.length; i++) {
@@ -69,7 +74,26 @@ function readTodayLeaves_() {
 
     var leaveDate = row[idx['休暇日']];
     if (!(leaveDate instanceof Date)) continue;
-    if (leaveDate < todayStart || leaveDate > todayEnd) continue;
+
+    var leaveYmd = fmtDate_(leaveDate, 'yyyy-MM-dd');
+    var appliedAt = appliedAtCol !== undefined ? row[appliedAtCol] : null;
+    var appliedYmd = '';
+    if (appliedAt) {
+      try {
+        appliedYmd = appliedAt instanceof Date
+          ? fmtDate_(appliedAt, 'yyyy-MM-dd')
+          : fmtDate_(new Date(appliedAt), 'yyyy-MM-dd');
+      } catch (e) { appliedYmd = ''; }
+    }
+
+    // 条件A: 既存 → 休暇日＝本日
+    var matchToday = (leaveDate >= todayStart && leaveDate <= todayEnd);
+    // 条件B: 追加 → 本日提出かつ過去日休暇（年度開始以降）
+    var matchRetro = (appliedYmd === todayYmd) && (leaveYmd < todayYmd) && (leaveYmd >= fyStartYmd);
+    if (!matchToday && !matchRetro) continue;
+
+    var isRetroactive = computeIsRetroactive_(appliedAt, leaveYmd);
+    var daysAgo = isRetroactive ? computeDaysAgo_(leaveYmd, todayYmd) : 0;
 
     out.push({
       deptName: normalize_(row[idx['部署名']]),
@@ -77,6 +101,10 @@ function readTodayLeaves_() {
       leaveType: normalize_(row[idx['休暇種類']]),
       leaveKubun: normalize_(row[idx['休暇区分']]),
       halfType: normalize_(row[idx['半日区分']]),
+      leaveDate: fmtDate_(leaveDate, 'yyyy/MM/dd'),
+      targetDate: leaveYmd,
+      isRetroactive: isRetroactive,
+      daysAgo: daysAgo,
     });
   }
 
@@ -88,6 +116,7 @@ function readTodayLeaves_() {
 
 /**
  * 1次未承認の休暇申請を取得（申請中 + 休暇日が今日以降）
+ * 追加: 本日提出された過去日休暇のうち未承認のものも拾う
  */
 function readPendingApproval1_() {
   var ss = getLeaveSS_();
@@ -102,8 +131,13 @@ function readPendingApproval1_() {
   var idx = buildLeaveHeaderIndex_(header);
 
   var values = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getValues();
+  var now = new Date();
+  var todayYmd = fmtDate_(now, 'yyyy-MM-dd');
+  var fyStartYmd = fmtDate_(getFiscalYearStartDate_(now), 'yyyy-MM-dd');
   var today = new Date();
   today.setHours(0, 0, 0, 0);
+
+  var appliedAtCol = idx['申請日時'] !== undefined ? idx['申請日時'] : idx['APPLIED_AT'];
 
   var out = [];
   for (var i = 0; i < values.length; i++) {
@@ -115,7 +149,26 @@ function readPendingApproval1_() {
     if (!(leaveDate instanceof Date)) continue;
     var ld = new Date(leaveDate);
     ld.setHours(0, 0, 0, 0);
-    if (ld < today) continue;
+    var leaveYmd = fmtDate_(leaveDate, 'yyyy-MM-dd');
+
+    var appliedAt = appliedAtCol !== undefined ? row[appliedAtCol] : null;
+    var appliedYmd = '';
+    if (appliedAt) {
+      try {
+        appliedYmd = appliedAt instanceof Date
+          ? fmtDate_(appliedAt, 'yyyy-MM-dd')
+          : fmtDate_(new Date(appliedAt), 'yyyy-MM-dd');
+      } catch (e) { appliedYmd = ''; }
+    }
+
+    // 条件A: 既存 → 休暇日が今日以降
+    var matchFuture = (ld >= today);
+    // 条件B: 追加 → 本日提出かつ過去日休暇（年度開始以降）
+    var matchRetro = (appliedYmd === todayYmd) && (leaveYmd < todayYmd) && (leaveYmd >= fyStartYmd);
+    if (!matchFuture && !matchRetro) continue;
+
+    var isRetroactive = computeIsRetroactive_(appliedAt, leaveYmd);
+    var daysAgo = isRetroactive ? computeDaysAgo_(leaveYmd, todayYmd) : 0;
 
     out.push({
       deptName: normalize_(row[idx['部署名']]),
@@ -123,6 +176,9 @@ function readPendingApproval1_() {
       leaveDate: fmtDate_(leaveDate, 'yyyy/MM/dd'),
       leaveType: normalize_(row[idx['休暇種類']]),
       leaveKubun: normalize_(row[idx['休暇区分']]),
+      targetDate: leaveYmd,
+      isRetroactive: isRetroactive,
+      daysAgo: daysAgo,
     });
   }
 
@@ -151,6 +207,10 @@ function readPendingApproval2_() {
 
   var at2Col = idx['2次承認日時'] !== undefined ? idx['2次承認日時'] : idx['APPROVED_AT2'];
   var approvedAtCol = idx['承認日時'] !== undefined ? idx['承認日時'] : idx['APPROVED_AT'];
+  var appliedAtCol = idx['申請日時'] !== undefined ? idx['申請日時'] : idx['APPLIED_AT'];
+
+  var now = new Date();
+  var todayYmd = fmtDate_(now, 'yyyy-MM-dd');
 
   var out = [];
   for (var i = 0; i < values.length; i++) {
@@ -163,6 +223,11 @@ function readPendingApproval2_() {
 
     var leaveDate = row[idx['休暇日']];
     if (!(leaveDate instanceof Date)) continue;
+
+    var leaveYmd = fmtDate_(leaveDate, 'yyyy-MM-dd');
+    var appliedAt = appliedAtCol !== undefined ? row[appliedAtCol] : null;
+    var isRetroactive = computeIsRetroactive_(appliedAt, leaveYmd);
+    var daysAgo = isRetroactive ? computeDaysAgo_(leaveYmd, todayYmd) : 0;
 
     var approvedAt = '';
     if (approvedAtCol !== undefined && row[approvedAtCol]) {
@@ -178,6 +243,9 @@ function readPendingApproval2_() {
       leaveType: normalize_(row[idx['休暇種類']]),
       leaveKubun: normalize_(row[idx['休暇区分']]),
       approvedAt: approvedAt,
+      targetDate: leaveYmd,
+      isRetroactive: isRetroactive,
+      daysAgo: daysAgo,
     });
   }
 

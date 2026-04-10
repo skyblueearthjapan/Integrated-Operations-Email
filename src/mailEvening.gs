@@ -6,7 +6,7 @@
  * 残業申請状況 + 休暇1次未承認通知
  */
 function sendEveningMail1() {
-  var to = getMailTo_();
+  var to = getEveningMailTo_();
   if (!to) { Logger.log('送信先メールが未設定'); return; }
 
   var now = new Date();
@@ -40,26 +40,34 @@ function sendEveningMail1() {
       lines.push('以下の休暇届が申請されていますが、まだ1次承認されていません。');
       lines.push('');
       var groups = {};
+      var p1RetroCount = 0;
       for (var i = 0; i < pending1.length; i++) {
         var p = pending1[i];
         if (!groups[p.deptName]) groups[p.deptName] = [];
         groups[p.deptName].push(p);
+        if (p.isRetroactive) p1RetroCount++;
       }
       var depts = Object.keys(groups).sort();
       for (var i = 0; i < depts.length; i++) {
         var arr = groups[depts[i]];
         lines.push('■ ' + depts[i] + '(' + arr.length + '件)');
         for (var j = 0; j < arr.length; j++) {
-          lines.push('  - ' + arr[j].workerName + '　' + arr[j].leaveDate + '　' + arr[j].leaveType + '(' + arr[j].leaveKubun + ')');
+          // 休暇行は既に休暇日が表示されるので対象日なしラベル
+          var retroLabel = formatRetroactiveLabel_(arr[j], false);
+          lines.push('  - ' + arr[j].workerName + '　' + arr[j].leaveDate + '　' + arr[j].leaveType + '(' + arr[j].leaveKubun + ')' + retroLabel);
         }
         lines.push('');
       }
       lines.push('合計: ' + pending1.length + '件');
+      if (p1RetroCount > 0) {
+        lines.push('（うち過去申請: ' + p1RetroCount + '件）');
+      }
     }
     var leaveUrl = getLeaveAppUrl_();
     if (leaveUrl) {
       lines.push('');
-      lines.push('承認はこちらから：' + leaveUrl + '?page=top');
+      lines.push('休暇届アプリ：' + leaveUrl);
+      lines.push('2次承認ページ：' + leaveUrl + '?page=somuAdmin');
     }
   } catch (e) {
     lines.push('（休暇未承認データ取得でエラー: ' + e.message + '）');
@@ -79,7 +87,7 @@ function sendEveningMail1() {
  * 残業申請状況（更新版）+ 休暇2次未承認通知
  */
 function sendEveningMail2() {
-  var to = getMailTo_();
+  var to = getEveningMailTo_();
   if (!to) { Logger.log('送信先メールが未設定'); return; }
 
   var now = new Date();
@@ -113,26 +121,33 @@ function sendEveningMail2() {
       lines.push('以下の休暇届が1次承認済みですが、2次承認がまだ完了していません。');
       lines.push('');
       var groups = {};
+      var p2RetroCount = 0;
       for (var i = 0; i < pending2.length; i++) {
         var p = pending2[i];
         if (!groups[p.deptName]) groups[p.deptName] = [];
         groups[p.deptName].push(p);
+        if (p.isRetroactive) p2RetroCount++;
       }
       var depts = Object.keys(groups).sort();
       for (var i = 0; i < depts.length; i++) {
         var arr = groups[depts[i]];
         lines.push('■ ' + depts[i] + '(' + arr.length + '件)');
         for (var j = 0; j < arr.length; j++) {
-          lines.push('  - ' + arr[j].workerName + '　' + arr[j].leaveDate + '　' + arr[j].leaveType + '(' + arr[j].leaveKubun + ')　1次承認: ' + arr[j].approvedAt);
+          var retroLabel = formatRetroactiveLabel_(arr[j], false);
+          lines.push('  - ' + arr[j].workerName + '　' + arr[j].leaveDate + '　' + arr[j].leaveType + '(' + arr[j].leaveKubun + ')　1次承認: ' + arr[j].approvedAt + retroLabel);
         }
         lines.push('');
       }
       lines.push('合計: ' + pending2.length + '件');
+      if (p2RetroCount > 0) {
+        lines.push('（うち過去申請: ' + p2RetroCount + '件）');
+      }
     }
     var leaveUrl = getLeaveAppUrl_();
     if (leaveUrl) {
       lines.push('');
-      lines.push('2次承認はこちらから：' + leaveUrl + '?page=somuAdmin');
+      lines.push('休暇届アプリ：' + leaveUrl);
+      lines.push('2次承認ページ：' + leaveUrl + '?page=somuAdmin');
     }
   } catch (e) {
     lines.push('（休暇2次承認データ取得でエラー: ' + e.message + '）');
@@ -167,18 +182,26 @@ function buildOtSection_(lines, dateObj, dateLabel) {
     lines.push('【本日の残業申請】');
     lines.push('');
     var otGroups = {};
+    var otRetroCount = 0;
     for (var i = 0; i < overtimeItems.length; i++) {
       var it = overtimeItems[i];
       if (!otGroups[it.dept]) otGroups[it.dept] = [];
       otGroups[it.dept].push(it);
+      if (it.isRetroactive) otRetroCount++;
     }
     var otDepts = Object.keys(otGroups).sort();
     for (var i = 0; i < otDepts.length; i++) {
       lines.push('■ ' + otDepts[i]);
       var arr = otGroups[otDepts[i]];
       for (var j = 0; j < arr.length; j++) {
-        lines.push('- ' + arr[j].workerName + '：残業 ' + fmtMinutesJa_(arr[j].approvedMinutes) + '（' + arr[j].statusLabel + '）');
+        // 過去申請の場合は対象日付きラベルを末尾に付加
+        var retroLabel = formatRetroactiveLabel_(arr[j], true);
+        lines.push('- ' + arr[j].workerName + '：残業 ' + fmtMinutesJa_(arr[j].approvedMinutes) + '（' + arr[j].statusLabel + '）' + retroLabel);
       }
+      lines.push('');
+    }
+    if (otRetroCount > 0) {
+      lines.push('（うち過去申請: ' + otRetroCount + '件）');
       lines.push('');
     }
   }
@@ -188,18 +211,26 @@ function buildOtSection_(lines, dateObj, dateLabel) {
     lines.push('【今週末の休日出勤申請】');
     lines.push('');
     var hdGroups = {};
+    var hdRetroCount = 0;
     for (var i = 0; i < holidayItems.length; i++) {
       var it = holidayItems[i];
       if (!hdGroups[it.dept]) hdGroups[it.dept] = [];
       hdGroups[it.dept].push(it);
+      if (it.isRetroactive) hdRetroCount++;
     }
     var hdDepts = Object.keys(hdGroups).sort();
     for (var i = 0; i < hdDepts.length; i++) {
       lines.push('■ ' + hdDepts[i]);
       var arr = hdGroups[hdDepts[i]];
       for (var j = 0; j < arr.length; j++) {
-        lines.push('- ' + arr[j].workerName + '：休日出勤 ' + arr[j].targetDateLabel + ' ' + fmtMinutesJa_(arr[j].approvedMinutes) + '（' + arr[j].statusLabel + '）');
+        // 休日出勤行は既に対象日が表示されるので対象日なしラベル
+        var retroLabel = formatRetroactiveLabel_(arr[j], false);
+        lines.push('- ' + arr[j].workerName + '：休日出勤 ' + arr[j].targetDateLabel + ' ' + fmtMinutesJa_(arr[j].approvedMinutes) + '（' + arr[j].statusLabel + '）' + retroLabel);
       }
+      lines.push('');
+    }
+    if (hdRetroCount > 0) {
+      lines.push('（うち過去申請: ' + hdRetroCount + '件）');
       lines.push('');
     }
   }
